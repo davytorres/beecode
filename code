@@ -1,0 +1,564 @@
+%Copyright (c) 2015, David Torres
+
+clear all
+close all
+
+
+% Transient bee model
+% Egg(i,j) represents the egg population that is j days old at time i(dt)
+% B(i,j) represents the brood population that is j days old at time i(dt)
+% H(i,j) represents the hive population that is j days old at time i(dt)
+% F(i,j) represents the foraging population that is j days old at time i(dt)
+% L is the laying rate of the queen bee per day that is j days old at time i(dt)
+
+
+% ndays_transfer: Number of days in older hive population which can be age accelerated or
+% deaccelerated to to pheromones
+ndays_transfer = 6;
+% Number of days to run simulation 
+ndays = 1*365; 
+ndays = 200;
+dt = .1;
+forager_rate = .1d0;
+
+expl = 4.d0;
+
+%forager_rate = .1d0;
+% n: Number of cycles
+n = ndays/dt;
+Lmax = 2000; % Maximum Egg-laying rate
+Lmax = 1600;
+
+% Number of days spent in each class 
+negg_levels= 3;
+nlarvae_levels = 5; 
+npupae_levels = 12;
+nnurse_levels = 10; 
+nhive_levels = 21;
+nforager_levels = 14; % Schmickl has a mean of 11 %Khoury states mean of 7
+ndrone_levels = 11;
+
+
+% Food consumption
+gamma_hive = .007; % grams/(bee*day)
+gamma_forager = gamma_hive; % grams/(bee*day)
+gamma_drone = 2.0*gamma_hive; % grams/(bee*day)
+gamma_larvae = .018; % grams/day % .0326 Russell
+gamma_larvae_death = 0.005; % grams/day for cannibalization
+
+% No food survival rates
+ nofood_surv_forager = 2.d0/3.d0;
+ nofood_surv_hive = 1.d0/2.d0;
+ nofood_surv_brood = 1.d0/5.d0;
+    
+% Death rates (Schmickl) based on data from Sakagami and Fukuda (1968)
+egg_death_rate = .03d0;
+larvae_death_rate = .01d0;
+pupae_death_rate = .001d0;
+hive_death_rate = .015d0;
+hive_death_rate_winter = .01d0;
+forager_death_rate = .045d0;
+
+% Weight of larvae at different ages - used for cannibalism
+weight(1) = .001d0;
+weight(2) = .006d0;
+weight(3) =  .020d0;
+weight(4) = .080d0;
+weight(5) = .150d0;
+
+% Death rate after foragers and drones after their last day
+forager_death_rate_end = 1.d0;
+drone_death_rate_end = 1.d0;
+
+% Daily survival rates
+s_e = 1.d0 - egg_death_rate;
+s_b = 1.d0 - larvae_death_rate;
+s_p = 1.d0 - pupae_death_rate;
+% s_h calculated in time loop
+s_f  = 1.d0 - forager_death_rate;
+
+% Presence of parasite
+parasite = 0;
+
+% Initial total number of bees
+total_bees = 8000.;
+
+% Healthy Brood to Nurse ratio
+ratio_H_L_eq = 2.d0;
+
+% Healthy Forager to Hive ratio (phermone impact parameter)
+ratio_H_F_eq = 2.3d0;
+
+eps = 1.d-12;
+
+initial_egg = .05*double(total_bees)/double(negg_levels);
+initial_larvae = .10*double(total_bees)/double(nlarvae_levels);
+initial_pupae = .98*.21*double(total_bees)/double(npupae_levels);
+initial_drone = .02*.21*double(total_bees)/double(ndrone_levels);
+initial_hive = .45*double(total_bees)/double(nhive_levels);
+initial_forager = .19*double(total_bees)/double(nforager_levels);
+% .05+.10+.21+.45+.19 = 1.0
+
+initial_egg = .0*double(total_bees)/double(negg_levels);
+initial_larvae = .0*double(total_bees)/double(nlarvae_levels);
+initial_pupae = .0*.21*double(total_bees)/double(npupae_levels);
+initial_drone = .0*.21*double(total_bees)/double(ndrone_levels);
+initial_hive = 1.*double(total_bees)/double(nhive_levels);
+initial_forager = 0.*double(total_bees)/double(nforager_levels);
+
+food = zeros(n+1,1);
+% Initial food (in grams) 
+food(1) = 2000.0; % 
+
+Egg = zeros(n+1,negg_levels);
+Etot = zeros(n+1,1);
+B = zeros(n+1,nlarvae_levels);
+Btot = zeros(n+1,1);
+H = zeros(n+1,nhive_levels);
+Htot = zeros(n+1,1);
+F = zeros(n+1,nforager_levels);
+Ftot = zeros(n+1,1);
+Adult = zeros(n+1,1);
+Brood = zeros(n+1,1);
+Drone = zeros(n+1,ndrone_levels);
+Dronetot = zeros(n+1,1);
+P = zeros(n+1,npupae_levels);
+Ptot = zeros(n+1,1);
+Beetot = zeros(n+1,1);
+time = zeros(n+1,1);
+season = zeros(n+1,1);
+
+% Set the initial populations on the first day
+
+% Eggs
+Etot(1) = 0.0;
+for j = 1:negg_levels
+   Egg(1,j) = initial_egg;
+   Etot(1) = Etot(1) + Egg(1,j);
+end
+
+% Larvae
+Btot(1) = 0.0;
+for j = 1:nlarvae_levels 
+    % Larvae 3 days old and younger eat royal jelly
+    B(1,j) = initial_larvae;
+    Btot(1) = Btot(1) + B(1,j);
+end
+
+% Pupae do not consume food
+Ptot(1) = 0.0;
+for j = 1:npupae_levels
+    P(1,j) = initial_pupae;
+    Ptot(1) = Ptot(1) + P(1,j);
+end
+
+% Drones
+Dronetot(1) = 0.0;
+for j = 1:ndrone_levels
+    Drone(1,j) = initial_drone;
+    Dronetot(1) = Dronetot(1) + Drone(1,j);
+end
+
+% Hive bees
+Htot(1) = 0.0;
+Nursetot = 0.0;
+for j = 1:nhive_levels
+    H(1,j) = initial_hive;
+    if (j <= nnurse_levels)
+        Nursetot = Nursetot + H(1,j);
+    end
+    Htot(1) = Htot(1) + H(1,j);
+end
+
+% Foraging bees
+Ftot(1) = 0.0;
+for j = 1:nforager_levels
+    F(1,j) = initial_forager;
+    Ftot(1) = Ftot(1) + F(1,j);
+end
+
+Adult(1) = Htot(1) + Ftot(1);
+Brood(1) = Etot(1)+Btot(1)+Ptot(1);
+Beetot(1) = Etot(1)+Btot(1)+Ptot(1)+Htot(1)+Ftot(1)+Dronetot(1);
+
+% Food required by colony in one day
+foodreq = (Ftot(1)*gamma_forager + Htot(1)*gamma_hive + Dronetot(1)*gamma_drone + ...
+                Btot(1)*gamma_larvae);
+
+food_inaccessible = 100.d0;
+food_accessible = max(food(1) - food_inaccessible,0.d0);
+if (food_accessible < foodreq) 
+   deficit = min(foodreq - food_accessible,0.d0);
+else
+   deficit = 0.0;
+end
+
+% Day of year to start simulation
+time(1) = 60.d0;
+
+% Parameters used in computing seasonal egg laying rate
+x1 = 385.d0;
+x2 = 30.d0;
+x3 = 36.d0;
+x4 = 155.d0;
+x5 = 30.d0;
+
+% pher: Variable which regulates age maturation of old hive bees due to
+% pheromones
+pher = 1.d0;
+
+% Variables which modify the survival rate due to food shortage
+fsb = 1.d0;
+fsh = 1.d0;
+fsd = 1.d0;
+fsf = 1.d0;
+
+summer_begin = 65.d0;
+%summer_begin = 50.d0;
+summer_end = 260.d0;
+
+if (time(1) > summer_begin && time(1) < summer_end)
+    summer = 1;
+else
+    summer = 0;
+end
+
+% Loop over time
+for i = 1:n
+
+    timei = mod(time(i),365);
+    season1 = 1.d0 - 1.d0/(1.d0 + x1*exp(-2.d0*timei/x2));
+    season2 = 1.d0/(1.d0 + x3*exp(-2.d0*(timei-x4)/x5));
+    season(i) = max(season1,season2);
+    
+    summerp = summer;
+    if (timei > summer_begin && timei < summer_end)
+        % Summer
+        summer = 1;
+        
+        c = forager_rate; % Grams of food gathered in one day by one forager (and processed by hive)
+        % percent_drone = .02d0; 
+        percent_drone = 0.d0; % Percent of hive bees that become drones
+         s_h = fsh*(1.d0 - hive_death_rate);
+        
+    else
+        % Winter
+        summer = 0;
+      
+        c = 0; % Foraging rate set to zero
+        percent_drone = 0.d0;
+         s_h = fsh*(1.d0 - hive_death_rate_winter);
+        
+    end
+    if (summerp == 0 && summer == 1) 
+        switcha = 1;
+    else
+        switcha = 0;
+    end
+    
+    %if (fsb > .5d0)
+    if (Htot(i) > 1000)
+       L = Lmax*(1.d0-season(i));
+    else
+       L = 0.d0;
+    end
+   
+    % Module which decreases larvae survival rate in absense of sufficient
+    % hive bees
+    
+    rexp = 1.d0/expl;
+    ratio_H_L = Htot(i)/Btot(i);
+    ratio_N_L = Nursetot/Btot(i);
+    ratio_N_L_eq = .5d0*ratio_H_L_eq;
+    if (ratio_H_L < ratio_H_L_eq)
+       %s_b = fsb*(1.d0 - larvae_death_rate)*(ratio_H_L/ratio_H_L_eq)^(rexp);
+       s_b = fsb*(1.d0 - larvae_death_rate)*(ratio_N_L/ratio_N_L_eq)^(rexp);
+    else
+       s_b = fsb*(1.d0 - larvae_death_rate);
+    end
+    accel_brood = 1.d0 + 0.5d0*(ratio_H_L - ratio_H_L_eq)/ratio_H_L_eq;
+    accel_brood = max(accel_brood,.5d0);
+    accel_brood = min(accel_brood,2.d0);
+    
+    if (parasite > 0)
+       ratio_H_L_eq = 3.d0;
+       c = .05;
+       pause
+    end
+    
+    % Eggs don't require food - After 3 days eggs become larvae
+    Egg(i+1,1) = Egg(i,1)*(1.d0 - dt) + L*dt;
+    egg1 = Egg(i+1,1);
+    Egg(i+1,1) = max(0.0,Egg(i+1,1));
+    Egg(i+1,2) = Egg(i,2)*(1.d0 - dt) + Egg(i,1)*s_e*dt;
+    egg2 = Egg(i+1,2);
+    Egg(i+1,2) = max(0.0,Egg(i+1,2));
+    Egg(i+1,3) = Egg(i,3)*(1.d0 - dt) + Egg(i,2)*s_e*dt;
+    egg3 = Egg(i+1,3);
+    Egg(i+1,3) = max(0.0,Egg(i+1,3));
+    Etot(i+1) = Egg(i+1,1)+Egg(i+1,2)+Egg(i+1,3);
+    
+    % Larva - 5 days
+    B(i+1,1) = B(i,1)*(1.0 - dt) + Egg(i,3)*s_e*dt;
+    B(i+1,1) = max(0.0,B(i+1,1));
+    Btot(i+1) = B(i+1,1);
+    
+    
+    
+    total_weight_deaths_larvae = 0.d0;
+    for j = 2:nlarvae_levels
+        B(i+1,j) = B(i,j)*(1.0 - dt)+ B(i,j-1)*s_b*dt;
+        total_weight_deaths_larvae =  total_weight_deaths_larvae + ...
+        (1.d0 - s_b)*B(i,j-1)*weight(j-1);
+        B(i+1,j) = max(0.0,B(i+1,j));
+        Btot(i+1) = Btot(i+1) + B(i+1,j);
+    end
+    
+    % Pupae stay pupae for 12 days.
+    % Pupae don't need food.
+    P(i+1,1) = P(i,1)*(1.0 - dt) + B(i,nlarvae_levels)*s_b*dt;
+    total_weight_deaths_larve = total_weight_deaths_larvae + ...
+    (1.d0 - s_b)*B(i,nlarvae_levels)*weight(nlarvae_levels);
+    P(i+1,1) = max(0.0,P(i+1,1));
+    Ptot(i+1) = P(i+1,1);
+    for j = 2:npupae_levels
+        P(i+1,j) = P(i,j)*(1.0 - dt) + P(i,j-1)*s_p*dt;
+        P(i+1,j) = max(0.0,P(i+1,j));
+        Ptot(i+1) = Ptot(i+1) + P(i+1,j);
+    end
+    
+     % Ratio of hive bees to foraging bees
+    ratio_H_F = Htot(i)/Ftot(i);
+    
+    if (switcha == 1) 
+      % pause
+      % Triggered at beginning of summer
+       H(i,10) = H(i,10) + H(i,nhive_levels);
+       H(i,nhive_levels) = 0.d0;
+    end
+ 
+    H(i+1,1) = H(i,1)*(1.0 - dt) + (1.d0-percent_drone)*P(i,npupae_levels)*s_p*dt;
+    H(i+1,1) = max(0.0,H(i+1,1));
+    
+    Nursetot = H(i+1,1);
+    Htot(i+1) = H(i+1,1);
+    
+    for j = 2:nnurse_levels
+        H(i+1,j) = H(i,j)*(1.0 - dt) + H(i,j-1)*s_h*dt;
+        H(i+1,j) = max(0.0,H(i+1,j));
+        Htot(i+1) = Htot(i+1) + H(i+1,j);
+        Nursetot = Nursetot + H(i+1,j);
+    end
+    
+    for j = nnurse_levels+1:nhive_levels
+        if (j == nhive_levels - ndays_transfer)
+           H(i+1,j) = H(i,j)*(1.0 - dt*pher) + H(i,j-1)*s_h*dt;
+        else
+            if (j > nhive_levels - ndays_transfer)
+                if (c > .000001d0 | j < nhive_levels ) 
+                   H(i+1,j) = H(i,j)*(1.0 - dt*pher) + H(i,j-1)*s_h*pher*dt;
+                else
+                   H(i+1,j) = H(i,j)*(1.0 - dt*pher*hive_death_rate_winter) + H(i,j-1)*s_h*pher*dt;
+                end
+            else
+                H(i+1,j) = H(i,j)*(1.0 - dt) + H(i,j-1)*s_h*dt;
+            end
+        end
+        H(i+1,j) = max(0.0,H(i+1,j));
+        Htot(i+1) = Htot(i+1) + H(i+1,j);
+    end
+   
+    % We assume 2% (percent_drone) of the pupae become drones and 98% become worker bees.
+    Drone(i+1,1) = Drone(i,1)*(1.0 - dt) + percent_drone*P(i,npupae_levels)*s_p*dt;
+    Drone(i+1,1) = max(0.0,Drone(i+1,1));
+    Dronetot(i+1) = Drone(i+1,1);
+    for j = 2:ndrone_levels-1
+        Drone(i+1,j) = Drone(i,j)*(1.0-dt) + Drone(i,j-1)*s_h*fsd*dt;
+        Drone(i+1,j) = max(0.0,Drone(i+1,j));
+        Dronetot(i+1) = Dronetot(i+1) + Drone(i+1,j);
+    end
+    Drone(i+1,ndrone_levels) = Drone(i,ndrone_levels)*(1.d0-drone_death_rate_end*dt) + Drone(i,ndrone_levels-1)*s_h*fsd*dt;
+    Drone(i+1,ndrone_levels) = max(0.0,Drone(i+1,ndrone_levels));
+    Dronetot(i+1) = Dronetot(i+1) + Drone(i+1,ndrone_levels);
+      
+    deaccel = min(1.d0/pher,1.d0);
+    deaccel = max(deaccel,.5d0);
+    if (c < .0000001d0)
+    deaccel = 1.d0;
+    end
+    deaccel = 1.d0;
+   
+    if (c > .000001d0)
+       F(i+1,1) = F(i,1)*(1.0 - deaccel*dt) + H(i,nhive_levels)*s_h*pher*dt;
+    else
+       F(i+1,1) = F(i,1)*(1.0 - dt);  
+    end
+    F(i+1,1) = max(0.0,F(i+1,1));
+    Ftot(i+1) = F(i+1,1);
+    ndays_transferf = 6;
+    for j = 2:nforager_levels-1
+        if (j < ndays_transfer)
+        F(i+1,j) =  F(i,j)*(1.0 - dt*deaccel) + F(i,j-1)*s_f*fsf*dt*deaccel;   
+        else
+            if (j == ndays_transfer)
+                F(i+1,j) =  F(i,j)*(1.0 - dt) + F(i,j-1)*s_f*fsf*dt*deaccel; 
+            else
+                F(i+1,j) =  F(i,j)*(1.0 - dt) + F(i,j-1)*s_f*fsf*dt;
+            end
+        end
+        F(i+1,j) = max(0.0,F(i+1,j));
+        Ftot(i+1) = Ftot(i+1) + F(i+1,j);
+    end
+    F(i+1,nforager_levels) = F(i,nforager_levels)*(1.d0-forager_death_rate_end*dt) + F(i,nforager_levels-1)*s_f*fsf*dt;
+    F(i+1,nforager_levels) = max(0.0,F(i+1,nforager_levels));
+    Ftot(i+1) = Ftot(i+1) + F(i+1,nforager_levels);
+    
+
+    
+    mag_ethyl_oleate = 0.5d0;
+    foodfac = mag_ethyl_oleate*deficit/foodreq;
+
+    ratio_H_F_mod = ratio_H_F_eq - foodfac;
+
+    diff = (ratio_H_F - ratio_H_F_mod)/ratio_H_F_mod;
+    accel_ethyl = 1.d0 + diff;
+    accel_ethyl = min(3.d0,accel_ethyl);
+    accel_ethyl = max(1.d0/3.d0,accel_ethyl);
+    accel = accel_brood*accel_ethyl;
+    pher = min(3.d0,accel);
+    pher = max(1.d0/3.d0,pher);
+    if (c < .0000001)
+       pher = 1.d0;
+    end
+
+    
+    Adult(i+1) = Htot(i+1)+Ftot(i+1);
+    Brood(i+1) = Etot(i+1)+Btot(i+1)+Ptot(i+1);
+    Beetot(i+1) = Etot(i+1)+Btot(i+1)+Ptot(i+1)+Htot(i+1)+Ftot(i+1)+Dronetot(i+1);
+
+    food_need_forager = Ftot(i+1)*gamma_forager;
+    food_need_hive = Htot(i+1)*gamma_hive;
+    food_need_drone = Dronetot(i+1)*gamma_drone;
+    food_need_larvae = Btot(i+1)*gamma_larvae;
+    food_need_adult = food_need_forager+food_need_hive+food_need_drone;
+    % Food required by colony in one day
+    foodreq = food_need_adult + food_need_larvae;
+    
+     % Processors
+    Q = Htot(i+1) - Nursetot;
+    QFr = Q/(Ftot(i+1)+1.d-15);
+    fraction = double(nhive_levels - nnurse_levels + 1)/double(nhive_levels);
+    QFrhealthy = .8d0*fraction*ratio_H_F_eq;
+    QFrhealthy = 1.d0;
+    %pause
+ 
+    if (QFr < QFrhealthy)
+        %cred = ( QFr/QFrhealthy )^rexp;
+        cred = ( QFr/QFrhealthy );
+    else
+        cred = 1.d0;
+    end
+    
+    
+    
+    food(i+1) = food(i) +  c*cred*Ftot(i)*dt - foodreq*dt;
+    food(i+1) = max(0.0,food(i+1));
+    
+    food_accessible = max(food(i+1) - food_inaccessible,0.d0);
+    
+    if (food_accessible < foodreq) 
+       deficit = min(foodreq - food_accessible,0.d0);
+    else
+       deficit = 0.0;
+    end
+    
+    if (food_accessible < foodreq) 
+        % If the accessible food is greater than the daily food requirement,
+        % there are no deaths due to food
+        
+        % Addition of food due to cannibalization
+       
+        food(i+1) = food(i+1) + total_weight_deaths_larvae*.5d0*dt
+	    pause
+      
+        if (food_accessible < 0) 
+           
+           % Survival rates after one day
+           fsf = nofood_surv_forager
+           fsh = nofood_surv_hive;
+           fsd = nofood_surv_hive;
+           fsb = nofood_surv_brood;
+       
+        else
+            
+            
+            if (food_accessible > food_need_adult)
+                
+                food_left_larvae = food_accessible - food_need_adult;
+                surv_larvae = food_left_larvae/food_need_larvae;
+                fsf = 1.d0;
+                fsh = 1.d0;
+                fsd = 1.d0;
+                fsb = max(surv_larvae,nofood_surv_brood);
+                
+            else
+                
+                surv_adult = food_accessible/food_need_adult;
+                fsf = max(surv_adult,nofood_surv_forager);
+                fsh = max(surv_adult,nofood_surv_hive);
+                fsd = max(surv_adult,nofood_surv_hive);
+                fsb = nofood_surv_brood;
+                
+            end
+                
+                
+        end
+                     
+   
+    else
+        
+       fsf = 1.d0;
+       fsh = 1.d0;
+       fsd = 1.d0;
+       fsb = 1.d0;
+       
+    end
+    
+    if (Adult(i+1) < 1000.) 
+        fsf = 0.d0
+        fsh = 0.d0
+        fsd = 0.d0
+        fsb = 0.d0
+    end
+    time(i+1) = time(i) + dt;
+    
+    
+end
+
+nsymbols = 50;
+r = n/nsymbols;
+iskip = int64(r);
+iii = 0;
+
+
+for i = 1:iskip:n+1
+    iii =  iii + 1;
+    Etot1a(iii) = Etot(i);
+    Btot1a(iii) = Btot(i);
+    Htot1a(iii) = Htot(i);
+    Ftot1a(iii) = Ftot(i);
+    Adult1a(iii) = Adult(i);
+    Brood1a(iii) = Brood(i);
+    time1a(iii) = time(i);
+    food1a(iii) = food(i);
+end
+
+
+plot(time1a,Etot1a,'bo-',time1a,Btot1a,'kd-',time1a,Htot1a,'r+-',time1a,Ftot1a,'gv-','markers',10);
+h_l = legend('Egg','Larvae','Hive','Foragers','Location','Northwest');
+
+
+xlabel('Days','FontSize',18);
+ylabel('Number of bees','FontSize',18);
+set(h_l,'FontSize',14);
+legend boxoff
